@@ -9,7 +9,6 @@ use tracing::Instrument;
 use fastcgi_server::protocol as fcgi;
 use fastcgi_server::{async_io, cgi, Config, ExitStatus};
 
-
 // Shorthands for the types making up a `Request`. The `Compat` wrapper around the
 // reader and writer is a bridge between tokio's traits and those from futures-io.
 type Reader<'a> = tokio_util::compat::Compat<tokio::net::tcp::ReadHalf<'a>>;
@@ -46,7 +45,10 @@ fn parse_request<'a>(request: &'a Request) -> Result<(http::Method, &'a str), Ex
 
     // SERVER_PROTOCOL is specified as case-insensitive
     let protocol = request.get_var(cgi::SERVER_PROTOCOL);
-    if protocol.and_then(|p| p.get(..5)).map_or(true, |p| !p.eq_ignore_ascii_case(b"http/")) {
+    if protocol
+        .and_then(|p| p.get(..5))
+        .map_or(true, |p| !p.eq_ignore_ascii_case(b"http/"))
+    {
         tracing::error!(?protocol, "request uses unsupported protocol");
         return Err(ExitStatus::Complete(2));
     }
@@ -60,7 +62,6 @@ fn parse_request<'a>(request: &'a Request) -> Result<(http::Method, &'a str), Ex
     let path = request.get_var_str(cgi::SCRIPT_NAME).unwrap_or_default();
     Ok((method, path))
 }
-
 
 const HELLO_CGI: &[u8] = b"hello-cgi-example";
 
@@ -113,30 +114,37 @@ async fn handle_redirect(request: &mut Request<'_, '_, '_>) -> io::Result<ExitSt
                 [(http::header::LOCATION.as_ref(), b"https://example.com/")];
             let status = http::StatusCode::TEMPORARY_REDIRECT;
             cgi::response::write_headers(&mut resp[..], status, headers.iter().copied())
-        },
+        }
 
         // A custom redirect with a body, as specified by CGI/1.1
         Some(b"type=body") => {
             let headers: [(&[u8], &[u8]); 2] = [
-                (http::header::CONTENT_TYPE.as_ref(), b"text/plain; charset=utf-8"),
-                (http::header::LOCATION.as_ref(), b"/local?from=redirect-body"),
+                (
+                    http::header::CONTENT_TYPE.as_ref(),
+                    b"text/plain; charset=utf-8",
+                ),
+                (
+                    http::header::LOCATION.as_ref(),
+                    b"/local?from=redirect-body",
+                ),
             ];
             let headers = headers.iter().copied();
             let body = "Content moved to </local>. Redirecting...\n".as_bytes();
             let mut dest = &mut resp[..];
             cgi::response::write_headers(&mut dest, http::StatusCode::MOVED_PERMANENTLY, headers)
                 .and_then(|h| dest.write_all(body).and(Ok(h + body.len())))
-        },
+        }
 
         // A local redirect that should be handled inside the webserver, though many
         // popular implementations do not support this. Apache httpd does not support
         // cgi::response::simple_redirect at all!
         Some(b"type=local") => {
             cgi::response::simple_redirect(&mut resp[..], "/local?from=redirect")
-        },
+        }
         // A simple client-side redirect, which always uses status code 302 Found
         _ => cgi::response::simple_redirect(&mut resp[..], "https://example.com/#content"),
-    }.expect("response should fit into the stack buffer");
+    }
+    .expect("response should fit into the stack buffer");
 
     // Write out the response directly, since we only need to write once
     let mut w = request.output_stream(fcgi::RecordType::Stdout);
@@ -154,7 +162,9 @@ async fn handle_echo(request: &mut Request<'_, '_, '_>) -> io::Result<ExitStatus
         return Ok(ExitStatus::Complete(4));
     }
 
-    let content_type = request.get_var(cgi::CONTENT_TYPE).unwrap_or(b"application/octet-stream");
+    let content_type = request
+        .get_var(cgi::CONTENT_TYPE)
+        .unwrap_or(b"application/octet-stream");
     let headers: [(&[u8], &[u8]); 3] = [
         (http::header::CONTENT_TYPE.as_ref(), content_type),
         (http::header::CACHE_CONTROL.as_ref(), b"no-store"),
@@ -170,9 +180,13 @@ async fn handle_echo(request: &mut Request<'_, '_, '_>) -> io::Result<ExitStatus
         Ok(l) => l,
         Err(e) => {
             let error: &dyn std::error::Error = &e;
-            tracing::error!(error, buffer = head.len(), "failed to write echo response headers");
+            tracing::error!(
+                error,
+                buffer = head.len(),
+                "failed to write echo response headers"
+            );
             return Ok(ExitStatus::Complete(5));
-        },
+        }
     };
 
     // Write out the headers and use futures' copy utility for echoing the body.
@@ -183,10 +197,16 @@ async fn handle_echo(request: &mut Request<'_, '_, '_>) -> io::Result<ExitStatus
 
     // CONTENT_LENGTH *should* match the stream length. If it doesn't,
     // something is wrong either with the webserver or this library.
-    let content_len: u64 =
-        request.get_var_str(cgi::CONTENT_LENGTH).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let content_len: u64 = request
+        .get_var_str(cgi::CONTENT_LENGTH)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     if copied != content_len {
-        tracing::warn!(read = copied, expected = content_len, "echo input stream ended short");
+        tracing::warn!(
+            read = copied,
+            expected = content_len,
+            "echo input stream ended short"
+        );
     }
     Ok(ExitStatus::SUCCESS)
 }
@@ -199,13 +219,19 @@ async fn fallback(request: &mut Request<'_, '_, '_>) -> io::Result<ExitStatus> {
     // and a status code; compose everything into a stack buffer; and finally write
     // the response into the output stream.
     let (status, body) = match request.get_var(cgi::REQUEST_METHOD) {
-        Some(b"GET" | b"POST" | b"PUT" | b"DELETE") => {
-            (http::StatusCode::NOT_FOUND, b"Unknown URL route\n".as_slice())
-        },
-        _ => (http::StatusCode::NOT_IMPLEMENTED, b"HTTP method not implemented\n".as_slice()),
+        Some(b"GET" | b"POST" | b"PUT" | b"DELETE") => (
+            http::StatusCode::NOT_FOUND,
+            b"Unknown URL route\n".as_slice(),
+        ),
+        _ => (
+            http::StatusCode::NOT_IMPLEMENTED,
+            b"HTTP method not implemented\n".as_slice(),
+        ),
     };
-    let headers: [(&[u8], &[u8]); 1] =
-        [(http::header::CONTENT_TYPE.as_ref(), b"text/plain; charset=utf-8")];
+    let headers: [(&[u8], &[u8]); 1] = [(
+        http::header::CONTENT_TYPE.as_ref(),
+        b"text/plain; charset=utf-8",
+    )];
 
     let mut resp = [0; 512];
     let mut dest = &mut resp[..];
@@ -217,7 +243,6 @@ async fn fallback(request: &mut Request<'_, '_, '_>) -> io::Result<ExitStatus> {
     w.write_all(&resp[..len]).await?;
     w.flush().await.and(Ok(ExitStatus::SUCCESS))
 }
-
 
 // This hello-world example uses the current-thread runtime for simplicity,
 // but the multi-threaded one is recommended for real applications.
@@ -260,25 +285,29 @@ async fn server(runner: &async_io::Runner) -> io::Result<()> {
                 let error: &dyn std::error::Error = &e;
                 tracing::info!(protocol = "tcp", %local, error, "accept failed");
                 continue;
-            },
+            }
         };
 
         // Spawn a separate task to handle the connection and wrap it in a tracing span
         let span = tracing::error_span!("fastcgi_connection", protocol = "tcp", %local, %remote);
-        tokio::spawn(async move {
-            tracing::debug!("new connection accepted");
-            // Split the connection into a read and a write half. fastcgi-server
-            // is architected around operating on two separate half-connections.
-            let (r, w) = conn.split();
-            // The handler future needs to be `Box::pin`ned until Rust gets proper async traits.
-            // You could also do other work in the closure before returning the boxed future,
-            // such as cloning some context to pass to the handler. Borrowing captured
-            // variables directly is currently not allowed by Rust.
-            token.run(r.compat(), w.compat_write(), |r| handler(r).boxed()).await
-        }.instrument(span));
+        tokio::spawn(
+            async move {
+                tracing::debug!("new connection accepted");
+                // Split the connection into a read and a write half. fastcgi-server
+                // is architected around operating on two separate half-connections.
+                let (r, w) = conn.split();
+                // The handler future needs to be `Box::pin`ned until Rust gets proper async traits.
+                // You could also do other work in the closure before returning the boxed future,
+                // such as cloning some context to pass to the handler. Borrowing captured
+                // variables directly is currently not allowed by Rust.
+                token
+                    .run(r.compat(), w.compat_write(), |r| handler(r).boxed())
+                    .await
+            }
+            .instrument(span),
+        );
     }
 }
-
 
 /// Waits for a signal to shut the FastCGI server down.
 #[cfg(not(unix))]
@@ -297,7 +326,6 @@ async fn quit() -> io::Result<()> {
     }
 }
 
-
 /// Sets up a basic `tracing` subscriber to stderr. Its verbosity level is
 /// configured with the `RUST_LOG` environment variable.
 fn init_tracing() {
@@ -308,13 +336,13 @@ fn init_tracing() {
             Err(e) => {
                 eprintln!("Ignoring `RUST_LOG={var}`: {e}");
                 LevelFilter::INFO
-            },
+            }
         },
         Ok(_) | Err(std::env::VarError::NotPresent) => LevelFilter::INFO,
         Err(e) => {
             eprintln!("Ignoring `RUST_LOG`: {e}");
             LevelFilter::INFO
-        },
+        }
     };
 
     fmt::fmt()
